@@ -1,0 +1,6 @@
+*.bak
+.ipynb_checkpoints/
+data/
+saved_models/
+lightning_logs/
+__pycache__/

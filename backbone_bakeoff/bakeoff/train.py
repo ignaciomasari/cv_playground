@@ -1,9 +1,10 @@
-"""One FT run via Lightning: `python -m bakeoff.train --config configs/default.yaml --set frac=0.1 seed=1`."""
+"""One run (FT via Lightning | LP) -> results row: `python -m bakeoff.train --set mode=lp backbone=vit_s16 seed=1`."""
 import argparse
+import json
 import math
 import time
 import warnings
-from functools import partial
+from functools import partial, partialmethod
 
 import lightning as L
 import torch
@@ -12,7 +13,8 @@ from torch.utils.data import DataLoader, TensorDataset
 
 from . import data as bd
 from . import models as bm
-from .config import load_config
+from .config import config_hash, load_config, recipe
+from .lp import run_lp
 from .results import log_row
 
 # data = in-RAM int16 tensors, prep on GPU -> workers not needed
@@ -59,12 +61,14 @@ class FTModule(L.LightningModule):
     def on_after_batch_transfer(self, batch, dataloader_idx):
         x, y = batch
         self.spec.to(self.device)
-        return bm.prep(x, self.spec, self.trainer.training, self.cfg.img_size), y
+        aug = self.trainer.training and self.cfg.aug == "d4"
+        return bm.prep(x, self.spec, aug, self.cfg.img_size), y
 
     def training_step(self, batch, _):
         x, y = batch
         loss = self.crit(self(x), y)
         self.last_loss = loss.detach()
+        self.log("train_loss", loss, on_step=True, on_epoch=False, prog_bar=True)
         return loss
 
     def _eval_start(self):
@@ -75,11 +79,12 @@ class FTModule(L.LightningModule):
         self.correct += (self(x).argmax(1) == y).sum().item()
         self.count += len(y)
 
-    def _eval_end(self):
-        self.log("acc", self.correct / max(1, self.count))
+    def _eval_end(self, split):
+        self.log(f"{split}_acc", self.correct / max(1, self.count))
 
     on_validation_epoch_start = on_test_epoch_start = _eval_start
-    on_validation_epoch_end = on_test_epoch_end = _eval_end
+    on_validation_epoch_end = partialmethod(_eval_end, "val")
+    on_test_epoch_end = partialmethod(_eval_end, "test")
 
     def validation_step(self, batch, _):
         self._eval_step(batch)
@@ -101,35 +106,58 @@ def _loader(x, y, bs, train, num_workers=0):
                       pin_memory=torch.cuda.is_available())
 
 
-def run(cfg, data=None):
-    """One FT run -> results row (also appended to cfg.results_csv). data: {split: (x int16, y)} or load cache."""
-    L.seed_everything(cfg.seed, workers=True, verbose=False)
+def _loggers(cfg):
+    """FT curves (train_loss, lr per step; val acc if val_every) under out_dir/{runs,tb}/<hash>."""
+    if not cfg.curves:
+        return False
+    from lightning.pytorch.loggers import CSVLogger, TensorBoardLogger
+    run_id = config_hash(cfg)
+    loggers = [CSVLogger(cfg.out_dir, name="runs", version=run_id)]
+    if cfg.tensorboard:
+        loggers.append(TensorBoardLogger(cfg.out_dir, name="tb", version=run_id))
+    return loggers
+
+
+def run_ft(cfg, data):
+    """-> FT row fields (no config cols)."""
     torch.backends.cudnn.benchmark = True  # as notebook
     torch.backends.cuda.matmul.allow_tf32 = torch.backends.cudnn.allow_tf32 = True
-    data = data or bd.load_eurosat(cfg.data_root)
-    stats = bd.band_stats(data["train"][0]) if cfg.init == "imagenet_13ch" else (None, None)
-    model, spec = bm.build(cfg.backbone, cfg.init, cfg.num_classes, band_mean=stats[0], band_std=stats[1],
-                           pretrained=cfg.pretrained)
-    idx = torch.from_numpy(bd.subset_idx(data["train"][1], cfg.frac, cfg.seed, cfg.num_classes))
-    x, y = data["train"][0][idx], data["train"][1][idx]
-    total = max(1, len(y) // cfg.bs) * cfg.max_epochs
+    model, spec = bm.build_from(cfg, data["train"][0])
+    _, x, y = bd.train_subset(data, cfg)
+    steps_per_ep = max(1, len(y) // cfg.bs)
+    total = steps_per_ep * cfg.max_epochs
     module = FTModule(model, spec, cfg, total)
+    loggers = _loggers(cfg)
     trainer = L.Trainer(accelerator=cfg.accelerator, devices=1, precision=cfg.precision, max_epochs=cfg.max_epochs,
-                        gradient_clip_val=cfg.clip, logger=False, enable_checkpointing=False,
+                        gradient_clip_val=cfg.clip, logger=loggers, enable_checkpointing=False,
+                        callbacks=[L.pytorch.callbacks.LearningRateMonitor("step")] if loggers else None,
+                        log_every_n_steps=min(10, steps_per_ep), check_val_every_n_epoch=max(1, cfg.val_every),
                         enable_progress_bar=cfg.progress, enable_model_summary=False, num_sanity_val_steps=0)
     cuda = trainer.strategy.root_device.type == "cuda"
     if cuda:
         torch.cuda.reset_peak_memory_stats()
-    trainer.fit(module, _loader(x, y, cfg.bs, True, cfg.num_workers))
+    val = _loader(*data["val"], bd.EVAL_BS, False, cfg.num_workers) if cfg.val_every > 0 else None
+    trainer.fit(module, _loader(x, y, cfg.bs, True, cfg.num_workers), val)
     peak = torch.cuda.max_memory_allocated() / 2**20 if cuda else float("nan")
 
     def top1(split, fn):  # fn: trainer.validate | trainer.test
-        return fn(module, _loader(*data[split], 256, False, cfg.num_workers), verbose=False)[0]["acc"]
-    row = dict(backbone=cfg.backbone, init=cfg.init, mode="ft", frac=cfg.frac, seed=cfg.seed,
-               in_chans=bm.in_chans_of(cfg.init), n_train=len(y),
-               top1_val=top1("val", trainer.validate), top1_test=top1("test", trainer.test),
-               steps=trainer.global_step, final_loss=float(module.last_loss),
-               train_time_s=module.train_time_s, train_peak_mem_MB=peak)
+        return fn(module, _loader(*data[split], bd.EVAL_BS, False, cfg.num_workers), verbose=False)[0][f"{split}_acc"]
+    return dict(n_train=len(y), top1_val=top1("val", trainer.validate), top1_test=top1("test", trainer.test),
+                steps=trainer.global_step, final_loss=float(module.last_loss),
+                train_time_s=module.train_time_s, train_peak_mem_MB=peak)
+
+
+RUNNERS = {"ft": run_ft, "lp": run_lp}
+
+
+def run(cfg, data=None):
+    """One run -> results row, appended to cfg.results_csv. data: {split: (x int16, y)} or load cache."""
+    L.seed_everything(cfg.seed, workers=True, verbose=False)
+    data = data or bd.load_eurosat(cfg.data_root)
+    metrics = RUNNERS[cfg.mode](cfg, data)
+    row = dict(backbone=cfg.backbone, init=cfg.init, mode=cfg.mode, frac=cfg.frac, seed=cfg.seed,
+               in_chans=bm.in_chans_of(cfg.init), **metrics,
+               config_hash=config_hash(cfg), config=json.dumps(recipe(cfg), sort_keys=True))
     log_row(cfg.results_csv, row)
     return row
 
@@ -140,7 +168,7 @@ def main(argv=None, data=None):
     p.add_argument("--set", nargs="*", default=[], metavar="KEY=VAL", help="config overrides")
     a = p.parse_args(argv)
     row = run(load_config(a.config, a.set), data)
-    print({k: (round(v, 4) if isinstance(v, float) else v) for k, v in row.items()})
+    print({k: (round(v, 4) if isinstance(v, float) else v) for k, v in row.items() if k != "config"})
     return row
 
 

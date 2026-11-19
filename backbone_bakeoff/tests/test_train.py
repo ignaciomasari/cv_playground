@@ -1,7 +1,11 @@
+import os
+
+import pandas as pd
 import pytest
 import timm
 import torch
 
+import bakeoff.models as bm
 from bakeoff.results import RESULT_COLS, read_results
 from bakeoff.train import lr_lambda, main, param_groups
 
@@ -44,10 +48,10 @@ def fake_eurosat(n=24, hw=16):
 
 
 def test_cli_run_appends_one_ft_row(tmp_path):
-    out = str(tmp_path / "r.csv")
+    out = str(tmp_path / "results.csv")
     row = main(["--set", "backbone=resnet50", "init=s2_ssl", "frac=1.0", "seed=1", "epochs=2", "bs=8",
                 "img_size=32", "pretrained=false", "accelerator=cpu", "precision=32-true",
-                "num_workers=0", "progress=false", f"results_csv={out}"], data=fake_eurosat())
+                "num_workers=0", "progress=false", f"out_dir={tmp_path}"], data=fake_eurosat())
     df = read_results(out)
     assert list(df.columns) == RESULT_COLS and len(df) == 1
     r = df.iloc[0]
@@ -55,3 +59,28 @@ def test_cli_run_appends_one_ft_row(tmp_path):
     assert (r.n_train, r.steps) == (24, 6)  # 24 // 8 * 2 epochs
     assert 0 <= r.top1_val <= 1 and 0 <= r.top1_test <= 1 and r.final_loss > 0 and r.train_time_s > 0
     assert row["top1_test"] == r.top1_test
+
+
+# --- linear probe via same CLI
+
+
+def lp_argv(tmp_path):
+    return ["--set", "mode=lp", "backbone=resnet50", "init=s2_ssl", "frac=1.0", "seed=0", "img_size=32",
+            "pretrained=false", "accelerator=cpu", "precision=32-true", "lp_epochs=3", "lp_wd_grid=[0.0, 0.01]",
+            "progress=false", f"out_dir={tmp_path}"]
+
+
+def test_lp_cli_writes_lp_row_and_caches_features(tmp_path, monkeypatch):
+    row = main(lp_argv(tmp_path), data=fake_eurosat())
+    df = read_results(str(tmp_path / "results.csv"))
+    r = df.iloc[0]
+    assert (r["mode"], r.n_train, r.in_chans) == ("lp", 24, 13)
+    assert r.lp_wd in (0.0, 0.01) and 0 <= r.top1_val <= 1 and 0 <= r.top1_test <= 1
+    assert pd.isna(r.steps) and r.config_hash == row["config_hash"] and '"lp_epochs": 3' in r.config
+    assert any(f.startswith("feats_resnet50_s2_ssl") for f in os.listdir(tmp_path))
+
+    def no_build(*a, **k):
+        raise AssertionError("features should come from cache")
+    monkeypatch.setattr(bm, "build", no_build)
+    main(lp_argv(tmp_path) + ["seed=1"], data=fake_eurosat())
+    assert len(read_results(str(tmp_path / "results.csv"))) == 2

@@ -56,6 +56,15 @@ def class_names(root):
     return sorted(os.listdir(os.path.join(root, EuroSAT.base_dir)))
 
 
+EVAL_BS = 256  # eval / feature extraction batch
+
+
+def train_subset(data, cfg):
+    """-> (idx, x, y) of cfg.frac stratified train subset for cfg.seed."""
+    idx = torch.from_numpy(subset_idx(data["train"][1], cfg.frac, cfg.seed, cfg.num_classes))
+    return idx, data["train"][0][idx], data["train"][1][idx]
+
+
 def band_stats(x, n=2000):
     """Per-band DN mean/std on first n samples (for imagenet_13ch z-score)."""
     xt = x[:n].float()

@@ -14,6 +14,7 @@ dependencies = ["torch", "timm", "numpy", "pandas", "lightning>=2.4", "pyyaml"]
 [project.optional-dependencies]
 geo = ["torchgeo"]
 test = ["pytest"]
+tb = ["tensorboard"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

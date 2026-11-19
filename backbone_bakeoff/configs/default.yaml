@@ -1,9 +1,17 @@
-# Notebook FT recipe. Override per run: --set backbone=vit_s16 init=s2_ssl frac=0.01 seed=1
-backbone: resnet50
-init: imagenet_rgb
+# Notebook recipe. One run per call: python -m bakeoff.train --set mode=lp backbone=vit_s16 init=s2_ssl frac=0.01 seed=1
+mode: ft                # ft (Lightning) | lp (frozen features + linear head)
+backbone: resnet50      # resnet50 | vit_s16 | convnext_t
+init: imagenet_rgb      # imagenet_rgb | s2_ssl | imagenet_13ch (see bakeoff/models.py BACKBONES)
 frac: 0.1
 seed: 0
 
+# shared
+img_size: 224
+num_classes: 10
+pretrained: true
+precision: bf16-mixed
+
+# FT
 epochs: null            # null -> epochs_by_frac[frac]
 epochs_by_frac: {0.01: 200, 0.1: 50, 1.0: 15}
 lr: 2.0e-4
@@ -12,13 +20,23 @@ warmup_frac: 0.05       # linear warmup -> cosine
 label_smooth: 0.1
 clip: 1.0
 bs: 64
-img_size: 224
-num_classes: 10
-pretrained: true
+drop_rate: 0.0          # head dropout
+drop_path_rate: 0.0     # stochastic depth
+aug: d4                 # d4 | none
+val_every: 0            # >0: val acc curve every n epochs
 
-data_root: null         # null -> WORK_DIR/data/eurosat (WORK_DIR = /home/jovyan/work on pod, else ..)
-results_csv: null       # null -> WORK_DIR/saved_models/backbone_bakeoff/results.csv (same file as notebook)
+# LP
+lp_epochs: 100
+lp_lr: 1.0e-3
+lp_bs: 256
+lp_wd_grid: [0.0, 1.0e-4, 1.0e-3, 1.0e-2]   # best on val
+
+# system (not part of config_hash)
+out_dir: null           # null -> WORK_DIR/saved_models/backbone_bakeoff (WORK_DIR = /home/jovyan/work on pod, else ..)
+data_root: null         # null -> WORK_DIR/data/eurosat
+results_csv: null       # null -> out_dir/results.csv (same file as notebook)
 accelerator: auto
-precision: bf16-mixed
-num_workers: 0           # data in RAM, prep on GPU
+num_workers: 0          # data in RAM, prep on GPU
 progress: true
+curves: true            # FT: out_dir/runs/<hash>/metrics.csv
+tensorboard: false      # FT: + out_dir/tb/<hash> (needs tensorboard)

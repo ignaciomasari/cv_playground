@@ -1,5 +1,6 @@
 import pytest
 import torch
+from timm.layers import DropPath
 
 from bakeoff.data import RGB_IDX
 from bakeoff.models import InputSpec, build, load_s2_weights, prep
@@ -102,3 +103,25 @@ def test_s2_weights_reject_missing_backbone_keys():
     sd = {k: v for k, v in m.state_dict().items() if not k.startswith("layer4.")}
     with pytest.raises(ValueError):
         load_s2_weights(m, sd)
+
+
+# --- regularisation hparams reach timm model
+
+
+def head_drop(m):
+    """timm stores head dropout as attr (ResNet) or nn.Dropout module (ViT, ConvNeXt head)."""
+    ps = [x.p for x in m.modules() if isinstance(x, torch.nn.Dropout)]
+    return getattr(m, "drop_rate", None) if "drop_rate" in vars(m) else max(ps, default=0.0)
+
+
+@pytest.mark.parametrize("bb,init", [("vit_s16", "s2_ssl"), ("convnext_t", "imagenet_rgb"), ("resnet50", "imagenet_rgb")])
+def test_drop_rates_reach_model(bb, init):
+    m, _ = build(bb, init, 3, pretrained=False, drop_rate=0.3, drop_path_rate=0.2)
+    dp = [x.drop_prob for x in m.modules() if isinstance(x, DropPath)]
+    assert dp and max(dp) == pytest.approx(0.2)  # linear decay -> last block = rate
+    assert head_drop(m) == pytest.approx(0.3)
+
+
+def test_drop_rates_default_off():
+    m, _ = build("vit_s16", "imagenet_rgb", 3, pretrained=False)
+    assert not any(isinstance(x, DropPath) for x in m.modules()) and head_drop(m) == 0.0

@@ -3,7 +3,7 @@ import json
 
 import pandas as pd
 
-from .config import MODE_KEYS, SHARED_KEYS
+from .config import MODE_KEYS
 from .results import KEY
 
 GROUP = [k for k in KEY if k != "seed"] + ["in_chans"]  # summary rows
@@ -29,7 +29,19 @@ def varied(df):
 def with_varied(df, var=None):
     """-> (df + varied hparam columns, their names). var: explicit keys (e.g. [] = pool tuned recipes)."""
     var = varied(df) if var is None else list(var)
-    return df.drop(columns=var, errors="ignore").join(hparams(df)[var]), var
+    hp = hparams(df)
+    cols = [k for k in var if k in hp]  # others (e.g. "recipe" from tag) already in df
+    return df.drop(columns=cols, errors="ignore").join(hp[cols]), var
+
+
+def tag_by_grid(df, grids):
+    """Rows whose config_hash is in grid {name: grid.yaml} -> recipe=name; in several -> duplicated; none
+    (sweep, --set variants, old notebook rows) -> dropped."""
+    from .grid import expand  # lazy: grid pulls models/torch
+
+    parts = [df[df.config_hash.isin({r.run_id for r in expand(p)})].assign(recipe=name)
+             for name, p in grids.items()]
+    return pd.concat(parts, ignore_index=True)
 
 
 def summary(df, bench=None, var=None):
@@ -65,7 +77,8 @@ def paired_delta(df, col, a, b, var=None):
 def ft_lp_gap(df, var=None):
     """pp FT − LP per seed; each FT recipe vs each LP recipe (shared varied keys must match)."""
     df, var = with_varied(df, var)
-    on = [k for k in KEY if k != "mode"] + [k for k in var if k in SHARED_KEYS]
+    mode_only = set().union(*MODE_KEYS.values())
+    on = [k for k in KEY if k != "mode"] + [k for k in var if k not in mode_only]  # shared + tags
     own = {m: [k for k in var if k in MODE_KEYS[m]] for m in MODE_KEYS}
     side = lambda m: df.loc[df["mode"] == m, on + own[m] + ["top1_test"]]
     return _delta(side("ft"), side("lp"), on, extra=own["ft"] + own["lp"])

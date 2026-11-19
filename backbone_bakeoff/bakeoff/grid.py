@@ -1,7 +1,8 @@
 """Grid launcher: one subprocess per run, skip finished (config_hash in results), failures logged + skipped.
 
 `python -m bakeoff.grid configs/grid.yaml [--set epochs=2] [--dry-run]`
-grid.yaml: base (config path, rel. to grid file), set (fixed overrides), grid (key -> list; cartesian product).
+grid.yaml: base (config path, rel. to grid file), set (fixed overrides), grid (key -> list; cartesian product),
+rules (optional [{when: {backbone: .., init: ..}, set: {..}}] -> overrides for matching runs, e.g. tuned recipes).
 """
 import argparse
 import itertools
@@ -36,6 +37,12 @@ def _kv(k, v):
     return f"{k}={v if isinstance(v, str) else json.dumps(v)}"
 
 
+def _matches(cfg, when):
+    if unknown := set(when) - set(vars(cfg)):
+        raise ValueError(f"unknown rule keys: {sorted(unknown)}")
+    return all(getattr(cfg, k) == v for k, v in when.items())
+
+
 def expand(grid_path, overrides=()):
     """-> [Run] in grid order; unavailable (backbone, init) dropped. Bad keys/values raise here."""
     with open(grid_path) as f:
@@ -43,10 +50,14 @@ def expand(grid_path, overrides=()):
     base = os.path.join(os.path.dirname(os.path.abspath(grid_path)), spec.get("base", "default.yaml"))
     fixed = [_kv(k, v) for k, v in (spec.get("set") or {}).items()]
     keys, values = zip(*spec["grid"].items()) if spec.get("grid") else ((), ())
+    rules = spec.get("rules") or []
     runs = []
     for combo in itertools.product(*values):
-        ovr = fixed + [_kv(k, v) for k, v in zip(keys, combo)] + list(overrides)  # CLI wins
-        cfg = load_config(base, ovr)
+        grid_ovr = fixed + [_kv(k, v) for k, v in zip(keys, combo)]
+        cfg = load_config(base, grid_ovr + list(overrides))
+        ruled = [_kv(k, v) for r in rules if _matches(cfg, r["when"]) for k, v in r["set"].items()]
+        ovr = grid_ovr + ruled + list(overrides)  # later wins: rules > grid, CLI > all
+        cfg = load_config(base, ovr) if ruled else cfg
         if available(cfg.backbone, cfg.init):
             runs.append(Run(base, ovr, cfg, config_hash(cfg)))
     return runs

@@ -1,8 +1,9 @@
 import json
 
 import pytest
+import yaml
 
-from bakeoff.analysis import ft_lp_gap, paired_delta, summary
+from bakeoff.analysis import ft_lp_gap, paired_delta, summary, tag_by_grid
 from bakeoff.config import config_hash, load_config, recipe
 from bakeoff.models import in_chans_of
 from bakeoff.results import log_row, read_results
@@ -68,3 +69,25 @@ def test_explicit_var_pools_tuned_recipes(tmp_path):
     d = paired_delta(df, "init", "s2_ssl", "imagenet_rgb", var=[])
     assert d["mean"].tolist() == pytest.approx([5.0]) and "lr" not in d
     assert paired_delta(df, "lr", 1e-3, 5e-4, var=[]).empty  # different init -> no pair
+
+
+# --- fixed vs tuned (rows tagged by which grid's hashes they match)
+def test_tag_fixed_vs_tuned_side_by_side(tmp_path):
+    from test_grid import DEFAULT
+
+    def g(name, **extra):
+        (tmp_path / name).write_text(yaml.safe_dump(
+            {"base": DEFAULT, "set": {"frac": 0.1}, "grid": {"mode": ["lp", "ft"], "seed": [0, 1]}, **extra}))
+        return str(tmp_path / name)
+    grids = {"fixed": g("grid.yaml"),
+             "tuned": g("tuned.yaml", rules=[{"when": {"backbone": "resnet50"}, "set": {"lr": 1e-3}}])}
+    df = results(tmp_path, [row(0.80, mode="lp", seed=0), row(0.82, mode="lp", seed=1),   # in both grids
+                            row(0.90, seed=0), row(0.92, seed=1),                          # fixed FT
+                            row(0.94, seed=0, lr=1e-3), row(0.95, seed=1, lr=1e-3),        # tuned FT
+                            row(0.99, seed=0, lr=5e-4)])                                   # sweep only
+    t = tag_by_grid(df, grids)
+    s = summary(t, var=["recipe"]).set_index(["mode", "recipe"]).top1
+    assert s.to_dict() == pytest.approx({("lp", "fixed"): 0.81, ("lp", "tuned"): 0.81,
+                                         ("ft", "fixed"): 0.91, ("ft", "tuned"): 0.945})
+    d = paired_delta(t, "recipe", "tuned", "fixed", var=[]).set_index("mode")["mean"]
+    assert d.to_dict() == pytest.approx({"ft": 3.5, "lp": 0.0})

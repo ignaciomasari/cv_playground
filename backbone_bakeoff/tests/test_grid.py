@@ -83,3 +83,16 @@ def test_hung_run_times_out_and_grid_continues(tmp_path):
     out = launch(grid_file(tmp_path, {"seed": [9, 0]}), cmd=[sys.executable, str(script)], timeout_s=3)
     assert out == dict(ok=1, failed=1, skipped=0)
     assert pd.read_csv(tmp_path / "failures.csv").error[0] == "timeout after 3s"
+
+
+# --- per-(backbone, init) rules
+def test_rules_override_only_matching_runs_and_cli_wins(tmp_path):
+    p = tmp_path / "g.yaml"
+    p.write_text(yaml.safe_dump({"base": DEFAULT, "set": {"out_dir": str(tmp_path)},
+                                 "grid": {"backbone": ["resnet50", "vit_s16"], "init": ["imagenet_rgb", "s2_ssl"]},
+                                 "rules": [{"when": {"backbone": "vit_s16", "init": "s2_ssl"}, "set": {"lr": 1e-3}},
+                                           {"when": {"backbone": "resnet50"}, "set": {"wd": 0.1}}]}))
+    lr = {(r.cfg.backbone, r.cfg.init): (r.cfg.lr, r.cfg.wd) for r in expand(str(p))}
+    assert lr == {("resnet50", "imagenet_rgb"): (2e-4, 0.1), ("resnet50", "s2_ssl"): (2e-4, 0.1),
+                  ("vit_s16", "imagenet_rgb"): (2e-4, 0.05), ("vit_s16", "s2_ssl"): (1e-3, 0.05)}
+    assert {r.cfg.lr for r in expand(str(p), ["lr=5e-4"])} == {5e-4}

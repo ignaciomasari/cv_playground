@@ -15,6 +15,7 @@ dependencies = ["torch", "timm", "numpy", "pandas", "lightning>=2.4", "pyyaml"]
 geo = ["torchgeo"]
 test = ["pytest"]
 tb = ["tensorboard"]
+nb = ["matplotlib", "tabulate"]  # analysis cells
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

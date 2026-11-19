@@ -52,6 +52,11 @@ def expand(grid_path, overrides=()):
     return runs
 
 
+def child_env():
+    """os.environ + PKG_ROOT on PYTHONPATH -> `python -m bakeoff.*` works without install."""
+    return {**os.environ, "PYTHONPATH": os.pathsep.join(filter(None, [PKG_ROOT, os.environ.get("PYTHONPATH")]))}
+
+
 def pending(runs):
     done = {}
     for r in runs:
@@ -79,7 +84,7 @@ def launch(grid_path, overrides=(), cmd=None, dry_run=False, timeout_s=None):
     todo = pending(runs)
     out = dict(ok=0, failed=0, skipped=len(runs) - len(todo))
     print(f"{len(runs)} runs, {len(todo)} to do")
-    env = {**os.environ, "PYTHONPATH": os.pathsep.join(filter(None, [PKG_ROOT, os.environ.get("PYTHONPATH")]))}
+    env = child_env()
     for i, r in enumerate(todo, 1):
         c = r.cfg
         tag = f"[{i}/{len(todo)}] {c.mode} {c.backbone} {c.init} frac={c.frac} seed={c.seed} ({r.run_id})"

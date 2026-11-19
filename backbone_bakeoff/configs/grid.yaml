@@ -1,0 +1,10 @@
+# Full bake-off: python -m bakeoff.grid configs/grid.yaml   (resumable; --dry-run lists pending)
+# unavailable (backbone, init) combos skipped -> 6 pairs x 2 modes x 3 fracs x 3 seeds = 108 runs
+base: default.yaml
+set: {}
+grid:
+  mode: [lp, ft]          # LP first: cheap, features cached per (backbone, init)
+  backbone: [resnet50, vit_s16, convnext_t]
+  init: [imagenet_rgb, s2_ssl, imagenet_13ch]
+  frac: [0.01, 0.1, 1.0]
+  seed: [0, 1, 2]

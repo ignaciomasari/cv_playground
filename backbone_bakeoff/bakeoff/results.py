@@ -31,9 +31,12 @@ def read_results(path):
 def log_row(path, row):
     """Append row; file with other header moved to .bak first."""
     _ensure_schema(path)
+    append_csv(path, pd.DataFrame([row]).reindex(columns=RESULT_COLS))
+
+
+def append_csv(path, df):
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-    pd.DataFrame([row]).reindex(columns=RESULT_COLS).to_csv(
-        path, mode="a", header=not os.path.isfile(path), index=False)
+    df.to_csv(path, mode="a", header=not os.path.isfile(path), index=False)
 
 
 def done_keys(path):
@@ -41,3 +44,9 @@ def done_keys(path):
     if df is None:
         return set()
     return set(map(tuple, df[KEY].astype({"frac": float, "seed": int}).values.tolist()))
+
+
+def done_hashes(path):
+    """config_hash of finished runs (rows w/o hash, e.g. notebook, ignored)."""
+    df = read_results(path)
+    return set() if df is None else set(df.config_hash.dropna())

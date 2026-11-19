@@ -87,18 +87,26 @@ def config_hash(cfg):
 
 
 def load_config(path=None, overrides=()):
-    """YAML (optional) then overrides ["k=v", ...]; values parsed as YAML scalars."""
+    """YAML (optional) then overrides ["k=v", ...] (YAML values; text fields fall back to raw string)."""
     d = {}
     if path:
         with open(path) as f:
             d.update(yaml.safe_load(f) or {})
+    fields = dataclasses.fields(RunConfig)
+    str_keys = {f.name for f in fields if f.type in (str, Optional[str])}
     for o in overrides:
         k, _, v = o.partition("=")
-        d[k.strip()] = yaml.safe_load(v)
-    known = {f.name for f in dataclasses.fields(RunConfig)}
-    if unknown := set(d) - known:
+        k = k.strip()
+        try:
+            val = yaml.safe_load(v)
+        except yaml.YAMLError:
+            val = v
+        if k in str_keys and not isinstance(val, (str, type(None))):  # "{WORK_DIR}/x" -> dict, "16" -> int
+            val = v.strip()
+        d[k] = val
+    if unknown := set(d) - {f.name for f in fields}:
         raise ValueError(f"unknown config keys: {sorted(unknown)}")
-    for f in dataclasses.fields(RunConfig):  # YAML reads "1e-3" as str
+    for f in fields:  # YAML reads "1e-3" as str
         t = f.type.__args__[0] if getattr(f.type, "__args__", None) else f.type  # Optional[int] -> int
         if f.name in d and d[f.name] is not None and t in (int, float):
             d[f.name] = t(d[f.name])
@@ -109,6 +117,8 @@ def load_config(path=None, overrides=()):
     cfg.out_dir = cfg.out_dir or os.path.join(WORK_DIR, "saved_models", "backbone_bakeoff")
     cfg.data_root = cfg.data_root or os.path.join(WORK_DIR, "data", "eurosat")
     cfg.results_csv = cfg.results_csv or os.path.join(cfg.out_dir, "results.csv")
+    for k in ("out_dir", "data_root", "results_csv"):  # "{WORK_DIR}/..." -> pod/local work dir
+        setattr(cfg, k, getattr(cfg, k).replace("{WORK_DIR}", WORK_DIR))
     cfg.epochs_by_frac = {float(k): int(v) for k, v in cfg.epochs_by_frac.items()}
     cfg.lp_wd_grid = [float(w) for w in cfg.lp_wd_grid]
     return cfg

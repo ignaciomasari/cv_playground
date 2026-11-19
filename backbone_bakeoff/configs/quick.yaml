@@ -1,0 +1,12 @@
+# Smoke test (= notebook QUICK): 1 seed, 10%, 2 FT epochs, 10 LP epochs, separate out_dir
+base: default.yaml
+set:
+  epochs: 2
+  lp_epochs: 10
+  out_dir: "{WORK_DIR}/saved_models/backbone_bakeoff/quick"
+grid:
+  mode: [lp, ft]
+  backbone: [resnet50, vit_s16, convnext_t]
+  init: [imagenet_rgb, s2_ssl, imagenet_13ch]
+  frac: [0.1]
+  seed: [0]

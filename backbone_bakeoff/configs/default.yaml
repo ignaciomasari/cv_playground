@@ -31,7 +31,7 @@ lp_lr: 1.0e-3
 lp_bs: 256
 lp_wd_grid: [0.0, 1.0e-4, 1.0e-3, 1.0e-2]   # best on val
 
-# system (not part of config_hash)
+# system (not part of config_hash); paths may use {WORK_DIR}
 out_dir: null           # null -> WORK_DIR/saved_models/backbone_bakeoff (WORK_DIR = /home/jovyan/work on pod, else ..)
 data_root: null         # null -> WORK_DIR/data/eurosat
 results_csv: null       # null -> out_dir/results.csv (same file as notebook)

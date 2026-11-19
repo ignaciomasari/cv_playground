@@ -82,3 +82,14 @@ def test_hash_uses_resolved_epochs():
     assert config_hash(load_config(None, ["frac=0.1", "epochs_by_frac={0.01: 1, 0.1: 50, 1.0: 1}"])) == base
     assert config_hash(load_config(None, ["frac=0.1", "epochs=50"])) == base
     assert config_hash(load_config(None, ["frac=0.1", "epochs=51"])) != base
+
+
+def test_work_dir_placeholder_in_paths():
+    from bakeoff.config import WORK_DIR
+    cfg = load_config(None, ["out_dir={WORK_DIR}/x"])
+    assert cfg.out_dir == f"{WORK_DIR}/x" and cfg.results_csv == f"{WORK_DIR}/x/results.csv"
+
+
+def test_text_overrides_tolerate_quotes_and_spaces():
+    cfg = load_config(None, ["mode= lp", "init='s2_ssl'", "precision=16", "data_root=null"])
+    assert (cfg.mode, cfg.init, cfg.precision) == ("lp", "s2_ssl", "16") and cfg.data_root.endswith("eurosat")

@@ -9,7 +9,7 @@ packages = ["bakeoff"]
 name = "bakeoff"
 version = "0.1.0"
 requires-python = ">=3.11"
-dependencies = ["torch", "timm", "numpy", "pandas"]
+dependencies = ["torch", "timm", "numpy", "pandas", "lightning>=2.4", "pyyaml"]
 
 [project.optional-dependencies]
 geo = ["torchgeo"]

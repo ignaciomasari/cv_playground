@@ -5,3 +5,4 @@ saved_models/
 lightning_logs/
 __pycache__/
 *ROADMAP.md
+ssh_instructions.md

@@ -1,0 +1,24 @@
+# Notebook FT recipe. Override per run: --set backbone=vit_s16 init=s2_ssl frac=0.01 seed=1
+backbone: resnet50
+init: imagenet_rgb
+frac: 0.1
+seed: 0
+
+epochs: null            # null -> epochs_by_frac[frac]
+epochs_by_frac: {0.01: 200, 0.1: 50, 1.0: 15}
+lr: 2.0e-4
+wd: 0.05                # no wd on norm/bias/pos_embed/cls_token
+warmup_frac: 0.05       # linear warmup -> cosine
+label_smooth: 0.1
+clip: 1.0
+bs: 64
+img_size: 224
+num_classes: 10
+pretrained: true
+
+data_root: null         # null -> WORK_DIR/data/eurosat (WORK_DIR = /home/jovyan/work on pod, else ..)
+results_csv: null       # null -> WORK_DIR/saved_models/backbone_bakeoff/results.csv (same file as notebook)
+accelerator: auto
+precision: bf16-mixed
+num_workers: 0           # data in RAM, prep on GPU
+progress: true

@@ -14,8 +14,8 @@ def _ensure_schema(path):
     """Other header (old/corrupt) -> moved to .bak. True if file exists with RESULT_COLS."""
     if not os.path.isfile(path):
         return False
-    with open(path) as f:
-        header = f.readline().strip().split(",")
+    with open(path) as file:
+        header = file.readline().strip().split(",")
     if header != RESULT_COLS:
         os.replace(path, path + ".bak")
         print("schema mismatch -> moved to", path + ".bak")

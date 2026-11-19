@@ -6,9 +6,9 @@ from bakeoff.config import config_hash, load_config
 
 
 def write(tmp_path, text):
-    p = tmp_path / "c.yaml"
-    p.write_text(text)
-    return str(p)
+    yaml_path = tmp_path / "c.yaml"
+    yaml_path.write_text(text)
+    return str(yaml_path)
 
 
 def test_yaml_values_loaded(tmp_path):
@@ -44,10 +44,10 @@ def test_repo_default_yaml_matches_notebook_recipe():
 
 
 def test_hash_ignores_key_order_and_system_fields(tmp_path):
-    a = load_config(write(tmp_path, "lr: 1.0e-4\nseed: 1\n"))
-    b = load_config(None, ["seed=1", "lr=1.0e-4", "num_workers=4", "progress=false",
+    config_a = load_config(write(tmp_path, "lr: 1.0e-4\nseed: 1\n"))
+    config_b = load_config(None, ["seed=1", "lr=1.0e-4", "num_workers=4", "progress=false",
                            f"out_dir={tmp_path}", "accelerator=cpu"])
-    assert config_hash(a) == config_hash(b)
+    assert config_hash(config_a) == config_hash(config_b)
 
 
 @pytest.mark.parametrize("change", ["lr=1.0e-3", "drop_path_rate=0.1", "aug=none", "seed=1", "mode=lp"])

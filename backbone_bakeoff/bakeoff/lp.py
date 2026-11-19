@@ -29,52 +29,54 @@ def extract(cfg, data, device):
     path = feats_path(cfg)
     if os.path.isfile(path):
         return torch.load(path)
-    m, spec = bm.build_from(cfg, data["train"][0], num_classes=0, device=device)  # 0 -> pooled pre-logits
-    m.eval()
+    model, spec = bm.build_from(cfg, data["train"][0], num_classes=0, device=device)  # 0 -> pooled pre-logits
+    model.eval()
     amp = device.type == "cuda" and cfg.precision.startswith("bf16")
     feats = {}
     for split, (x, y) in data.items():
-        out = []
-        for b in bd.iterate(len(y), bd.EVAL_BS, False):
+        batch_feats = []
+        for batch_idx in bd.iterate(len(y), bd.EVAL_BS, False):
             with torch.autocast(device.type, dtype=torch.bfloat16, enabled=amp):
-                out.append(m(bm.prep(x[b], spec, False, cfg.img_size)).float().cpu())
-        feats[split] = torch.cat(out)
+                batch_feats.append(model(bm.prep(x[batch_idx], spec, False, cfg.img_size)).float().cpu())
+        feats[split] = torch.cat(batch_feats)
     os.makedirs(cfg.out_dir, exist_ok=True)
     torch.save(feats, path)
     return feats
 
 
-def train_linear(X, y, wd, cfg):
+def train_linear(feats, y, wd, cfg):
     torch.manual_seed(cfg.seed)
-    head = nn.Linear(X.size(1), cfg.num_classes).to(X.device)
-    opt = torch.optim.AdamW(head.parameters(), lr=cfg.lp_lr, weight_decay=wd)
-    bs = min(cfg.lp_bs, len(y))
-    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, cfg.lp_epochs * math.ceil(len(y) / bs))
+    head = nn.Linear(feats.size(1), cfg.num_classes).to(feats.device)
+    optimizer = torch.optim.AdamW(head.parameters(), lr=cfg.lp_lr, weight_decay=wd)
+    batch_size = min(cfg.lp_bs, len(y))
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, cfg.lp_epochs * math.ceil(len(y) / batch_size))
     for _ in range(cfg.lp_epochs):
-        for b in bd.iterate(len(y), bs, True):
-            loss = F.cross_entropy(head(X[b]), y[b])
-            opt.zero_grad(set_to_none=True)
+        for batch_idx in bd.iterate(len(y), batch_size, True):
+            loss = F.cross_entropy(head(feats[batch_idx]), y[batch_idx])
+            optimizer.zero_grad(set_to_none=True)
             loss.backward()
-            opt.step()
-            sched.step()
+            optimizer.step()
+            scheduler.step()
     return head
 
 
 @torch.no_grad()
-def _acc(head, X, y):
-    return (head(X).argmax(1) == y).float().mean().item()
+def _acc(head, feats, y):
+    return (head(feats).argmax(1) == y).float().mean().item()
 
 
 def run_lp(cfg, data):
     """-> LP row fields (no config cols). Standardise w/ subset stats; best wd on val -> test."""
-    dev = device_of(cfg)
-    feats = extract(cfg, data, dev)
-    idx, _, ytr = bd.train_subset(data, cfg)
-    Xtr, ytr = feats["train"][idx].to(dev), ytr.to(dev)
-    mu, sd = Xtr.mean(0), Xtr.std(0) + 1e-6
-    split = lambda s: ((feats[s].to(dev) - mu) / sd, data[s][1].to(dev))
-    Xtr = (Xtr - mu) / sd
-    (Xva, yva), (Xte, yte) = split("val"), split("test")
-    heads = [(wd, train_linear(Xtr, ytr, wd, cfg)) for wd in cfg.lp_wd_grid]
-    val, wd, head = max(((_acc(h, Xva, yva), wd, h) for wd, h in heads), key=lambda t: t[0])
-    return dict(n_train=len(idx), top1_val=val, top1_test=_acc(head, Xte, yte), lp_wd=wd)
+    device = device_of(cfg)
+    feats = extract(cfg, data, device)
+    idx, _, y_train = bd.train_subset(data, cfg)
+    train_feats, y_train = feats["train"][idx].to(device), y_train.to(device)
+    mu, sd = train_feats.mean(0), train_feats.std(0) + 1e-6
+    standardised = lambda split: ((feats[split].to(device) - mu) / sd, data[split][1].to(device))
+    train_feats = (train_feats - mu) / sd
+    (val_feats, y_val), (test_feats, y_test) = standardised("val"), standardised("test")
+    heads = [(wd, train_linear(train_feats, y_train, wd, cfg)) for wd in cfg.lp_wd_grid]
+    val_acc, wd, head = max(((_acc(head, val_feats, y_val), wd, head) for wd, head in heads),
+                            key=lambda candidate: candidate[0])
+    return dict(n_train=len(idx), top1_val=val_acc, top1_test=_acc(head, test_feats, y_test), lp_wd=wd)

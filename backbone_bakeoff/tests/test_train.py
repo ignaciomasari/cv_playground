@@ -26,25 +26,25 @@ def test_lr_warmup_then_cosine(step, expected):
 
 
 def test_no_weight_decay_on_norm_bias_and_vit_tokens():
-    m = timm.create_model("vit_tiny_patch16_224", pretrained=False, num_classes=3, img_size=32)
-    decay, no_decay = param_groups(m, wd=0.05)
+    model = timm.create_model("vit_tiny_patch16_224", pretrained=False, num_classes=3, img_size=32)
+    decay, no_decay = param_groups(model, wd=0.05)
     assert decay["weight_decay"] == 0.05 and no_decay["weight_decay"] == 0.0
-    names = {id(p): n for n, p in m.named_parameters()}
-    nd = {names[id(p)] for p in no_decay["params"]}
-    d = {names[id(p)] for p in decay["params"]}
-    assert {"pos_embed", "cls_token", "norm.weight", "head.bias"} <= nd
-    assert {"patch_embed.proj.weight", "head.weight"} <= d
-    assert len(nd) + len(d) == len(names)
+    names = {id(param): name for name, param in model.named_parameters()}
+    no_decay_names = {names[id(param)] for param in no_decay["params"]}
+    decay_names = {names[id(param)] for param in decay["params"]}
+    assert {"pos_embed", "cls_token", "norm.weight", "head.bias"} <= no_decay_names
+    assert {"patch_embed.proj.weight", "head.weight"} <= decay_names
+    assert len(no_decay_names) + len(decay_names) == len(names)
 
 
 # --- end-to-end: CLI -> Lightning fit -> one results row
 
 
 def fake_eurosat(n=24, hw=16):
-    g = torch.Generator().manual_seed(0)
-    mk = lambda: (torch.randint(0, 4000, (n, 13, hw, hw), generator=g, dtype=torch.int16),
-                  torch.arange(n) % 10)
-    return {"train": mk(), "val": mk(), "test": mk()}
+    generator = torch.Generator().manual_seed(0)
+    make_split = lambda: (torch.randint(0, 4000, (n, 13, hw, hw), generator=generator, dtype=torch.int16),
+                          torch.arange(n) % 10)
+    return {"train": make_split(), "val": make_split(), "test": make_split()}
 
 
 def test_cli_run_appends_one_ft_row(tmp_path):
@@ -54,11 +54,11 @@ def test_cli_run_appends_one_ft_row(tmp_path):
                 "num_workers=0", "progress=false", f"out_dir={tmp_path}"], data=fake_eurosat())
     df = read_results(out)
     assert list(df.columns) == RESULT_COLS and len(df) == 1
-    r = df.iloc[0]
-    assert (r.backbone, r.init, r["mode"], r.frac, r.seed, r.in_chans) == ("resnet50", "s2_ssl", "ft", 1.0, 1, 13)
-    assert (r.n_train, r.steps) == (24, 6)  # 24 // 8 * 2 epochs
-    assert 0 <= r.top1_val <= 1 and 0 <= r.top1_test <= 1 and r.final_loss > 0 and r.train_time_s > 0
-    assert row["top1_test"] == r.top1_test
+    saved = df.iloc[0]
+    assert (saved.backbone, saved.init, saved["mode"], saved.frac, saved.seed, saved.in_chans) == ("resnet50", "s2_ssl", "ft", 1.0, 1, 13)
+    assert (saved.n_train, saved.steps) == (24, 6)  # 24 // 8 * 2 epochs
+    assert 0 <= saved.top1_val <= 1 and 0 <= saved.top1_test <= 1 and saved.final_loss > 0 and saved.train_time_s > 0
+    assert row["top1_test"] == saved.top1_test
 
 
 # --- linear probe via same CLI
@@ -73,10 +73,10 @@ def lp_argv(tmp_path):
 def test_lp_cli_writes_lp_row_and_caches_features(tmp_path, monkeypatch):
     row = main(lp_argv(tmp_path), data=fake_eurosat())
     df = read_results(str(tmp_path / "results.csv"))
-    r = df.iloc[0]
-    assert (r["mode"], r.n_train, r.in_chans) == ("lp", 24, 13)
-    assert r.lp_wd in (0.0, 0.01) and 0 <= r.top1_val <= 1 and 0 <= r.top1_test <= 1
-    assert pd.isna(r.steps) and r.config_hash == row["config_hash"] and '"lp_epochs": 3' in r.config
+    saved = df.iloc[0]
+    assert (saved["mode"], saved.n_train, saved.in_chans) == ("lp", 24, 13)
+    assert saved.lp_wd in (0.0, 0.01) and 0 <= saved.top1_val <= 1 and 0 <= saved.top1_test <= 1
+    assert pd.isna(saved.steps) and saved.config_hash == row["config_hash"] and '"lp_epochs": 3' in saved.config
     assert any(f.startswith("feats_resnet50_s2_ssl") for f in os.listdir(tmp_path))
 
     def no_build(*a, **k):

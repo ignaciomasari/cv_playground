@@ -6,8 +6,8 @@ from bakeoff.data import RGB_IDX
 from bakeoff.models import InputSpec, build, load_s2_weights, prep
 
 
-def first_conv_in_chans(m):
-    return next(mod for mod in m.modules() if isinstance(mod, torch.nn.Conv2d)).in_channels
+def first_conv_in_chans(model):
+    return next(mod for mod in model.modules() if isinstance(mod, torch.nn.Conv2d)).in_channels
 
 
 # --- prep
@@ -53,17 +53,17 @@ def test_prep_eval_is_deterministic():
 
 # --- build (no downloads)
 
-@pytest.mark.parametrize("bb,init,chans", [
+@pytest.mark.parametrize("backbone,init,chans", [
     ("resnet50", "imagenet_rgb", 3), ("resnet50", "s2_ssl", 13),
     ("convnext_t", "imagenet_13ch", 13), ("vit_s16", "s2_ssl", 13)])
-def test_build_input_channels_follow_init(bb, init, chans):
-    m, spec = build(bb, init, pretrained=False, band_mean=torch.zeros(13), band_std=torch.ones(13))
-    assert first_conv_in_chans(m) == chans == len(spec.idx)
+def test_build_input_channels_follow_init(backbone, init, chans):
+    model, spec = build(backbone, init, pretrained=False, band_mean=torch.zeros(13), band_std=torch.ones(13))
+    assert first_conv_in_chans(model) == chans == len(spec.idx)
 
 
 def test_build_head_has_num_classes():
-    m, _ = build("resnet50", "s2_ssl", num_classes=10, pretrained=False)
-    assert m(torch.zeros(1, 13, 64, 64)).shape == (1, 10)
+    model, _ = build("resnet50", "s2_ssl", num_classes=10, pretrained=False)
+    assert model(torch.zeros(1, 13, 64, 64)).shape == (1, 10)
 
 
 def test_imagenet_rgb_spec_uses_each_models_pretrain_norm():
@@ -93,35 +93,35 @@ def test_unavailable_init_raises():
 # --- S2 checkpoint key guard
 
 def test_s2_weights_load_when_only_head_missing():
-    m, _ = build("resnet50", "s2_ssl", pretrained=False)
-    sd = {k: v for k, v in m.state_dict().items() if not k.startswith("fc.")}
-    load_s2_weights(m, sd)
+    model, _ = build("resnet50", "s2_ssl", pretrained=False)
+    state_dict = {key: value for key, value in model.state_dict().items() if not key.startswith("fc.")}
+    load_s2_weights(model, state_dict)
 
 
 def test_s2_weights_reject_missing_backbone_keys():
-    m, _ = build("resnet50", "s2_ssl", pretrained=False)
-    sd = {k: v for k, v in m.state_dict().items() if not k.startswith("layer4.")}
+    model, _ = build("resnet50", "s2_ssl", pretrained=False)
+    state_dict = {key: value for key, value in model.state_dict().items() if not key.startswith("layer4.")}
     with pytest.raises(ValueError):
-        load_s2_weights(m, sd)
+        load_s2_weights(model, state_dict)
 
 
 # --- regularisation hparams reach timm model
 
 
-def head_drop(m):
+def head_drop(model):
     """timm stores head dropout as attr (ResNet) or nn.Dropout module (ViT, ConvNeXt head)."""
-    ps = [x.p for x in m.modules() if isinstance(x, torch.nn.Dropout)]
-    return getattr(m, "drop_rate", None) if "drop_rate" in vars(m) else max(ps, default=0.0)
+    dropout_probs = [module.p for module in model.modules() if isinstance(module, torch.nn.Dropout)]
+    return getattr(model, "drop_rate", None) if "drop_rate" in vars(model) else max(dropout_probs, default=0.0)
 
 
-@pytest.mark.parametrize("bb,init", [("vit_s16", "s2_ssl"), ("convnext_t", "imagenet_rgb"), ("resnet50", "imagenet_rgb")])
-def test_drop_rates_reach_model(bb, init):
-    m, _ = build(bb, init, 3, pretrained=False, drop_rate=0.3, drop_path_rate=0.2)
-    dp = [x.drop_prob for x in m.modules() if isinstance(x, DropPath)]
-    assert dp and max(dp) == pytest.approx(0.2)  # linear decay -> last block = rate
-    assert head_drop(m) == pytest.approx(0.3)
+@pytest.mark.parametrize("backbone,init", [("vit_s16", "s2_ssl"), ("convnext_t", "imagenet_rgb"), ("resnet50", "imagenet_rgb")])
+def test_drop_rates_reach_model(backbone, init):
+    model, _ = build(backbone, init, 3, pretrained=False, drop_rate=0.3, drop_path_rate=0.2)
+    drop_path_probs = [module.drop_prob for module in model.modules() if isinstance(module, DropPath)]
+    assert drop_path_probs and max(drop_path_probs) == pytest.approx(0.2)  # linear decay -> last block = rate
+    assert head_drop(model) == pytest.approx(0.3)
 
 
 def test_drop_rates_default_off():
-    m, _ = build("vit_s16", "imagenet_rgb", 3, pretrained=False)
-    assert not any(isinstance(x, DropPath) for x in m.modules()) and head_drop(m) == 0.0
+    model, _ = build("vit_s16", "imagenet_rgb", 3, pretrained=False)
+    assert not any(isinstance(module, DropPath) for module in model.modules()) and head_drop(model) == 0.0

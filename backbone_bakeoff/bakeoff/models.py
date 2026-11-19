@@ -24,8 +24,8 @@ def in_chans_of(init):
     return 3 if init == "imagenet_rgb" else 13
 
 
-def available(bb, init):
-    return init in BACKBONES[bb]["inits"]
+def available(backbone, init):
+    return init in BACKBONES[backbone]["inits"]
 
 
 @dataclass
@@ -60,31 +60,32 @@ def load_s2_weights(model, state_dict):
         raise ValueError(f"S2 checkpoint key mismatch: {sorted(bad)[:5]}...")
 
 
-def build(bb, init, num_classes=10, *, device="cpu", band_mean=None, band_std=None, pretrained=True,
+def build(backbone, init, num_classes=10, *, device="cpu", band_mean=None, band_std=None, pretrained=True,
           drop_rate=0.0, drop_path_rate=0.0):
     """-> (model on device, channels_last; InputSpec). band_mean/std needed for imagenet_13ch."""
-    if not available(bb, init):
-        raise ValueError(f"{init} not available for {bb}")
-    cfg = BACKBONES[bb]
-    kw = dict(num_classes=num_classes, drop_rate=drop_rate, drop_path_rate=drop_path_rate)
+    if not available(backbone, init):
+        raise ValueError(f"{init} not available for {backbone}")
+    entry = BACKBONES[backbone]
+    timm_kwargs = dict(num_classes=num_classes, drop_rate=drop_rate, drop_path_rate=drop_path_rate)
     if init == "imagenet_rgb":
-        m = timm.create_model(f"{cfg['arch']}.{cfg['tag']}", pretrained=pretrained, **kw)
+        model = timm.create_model(f"{entry['arch']}.{entry['tag']}", pretrained=pretrained, **timm_kwargs)
         spec = InputSpec(RGB_IDX, scale=RGB_DN_MAX, clip=True,
-                         mean=m.pretrained_cfg["mean"], std=m.pretrained_cfg["std"])
+                         mean=model.pretrained_cfg["mean"], std=model.pretrained_cfg["std"])
     elif init == "imagenet_13ch":
         if band_mean is None or band_std is None:
             raise ValueError("imagenet_13ch needs band_mean/band_std")
         # timm adapt_input_conv: stem filters tiled R,G,B,... over 13 bands, x 3/13
-        m = timm.create_model(f"{cfg['arch']}.{cfg['tag']}", pretrained=pretrained, in_chans=13, **kw)
+        model = timm.create_model(f"{entry['arch']}.{entry['tag']}", pretrained=pretrained, in_chans=13,
+                                  **timm_kwargs)
         spec = InputSpec(list(range(13)), scale=1.0, clip=False, mean=band_mean, std=band_std)
     elif init == "s2_ssl":
-        m = timm.create_model(cfg["arch"], in_chans=13, **kw)
+        model = timm.create_model(entry["arch"], in_chans=13, **timm_kwargs)
         if pretrained:
-            load_s2_weights(m, _s2_weights(cfg["s2"]).get_state_dict(progress=True))
+            load_s2_weights(model, _s2_weights(entry["s2"]).get_state_dict(progress=True))
         spec = InputSpec(list(range(13)), scale=10_000.0, clip=False, mean=torch.zeros(13), std=torch.ones(13))
     else:
         raise ValueError(init)
-    return m.to(device, memory_format=torch.channels_last), spec.to(device)
+    return model.to(device, memory_format=torch.channels_last), spec.to(device)
 
 
 def build_from(cfg, train_x, *, num_classes=None, device="cpu"):
@@ -95,17 +96,17 @@ def build_from(cfg, train_x, *, num_classes=None, device="cpu"):
                  drop_rate=cfg.drop_rate, drop_path_rate=cfg.drop_path_rate)
 
 
-def prep(xb, spec, train, img_size=224):
+def prep(x_batch, spec, train, img_size=224):
     """int16 batch -> normalised float batch at img_size on spec's device; train: random D4 aug."""
-    dev = spec.mean.device
-    x = xb.to(dev, non_blocking=True)[:, spec.idx].float() / spec.scale
+    device = spec.mean.device
+    x = x_batch.to(device, non_blocking=True)[:, spec.idx].float() / spec.scale
     if spec.clip:
         x = x.clamp(0, 1)
     if train:  # per-sample hflip, vflip, transpose = all 8 dihedral variants
-        B = x.size(0)
-        for fn in (lambda t: t.flip(-1), lambda t: t.flip(-2), lambda t: t.transpose(-1, -2)):
-            m = torch.rand(B, device=dev) < 0.5
-            x = torch.where(m.view(B, 1, 1, 1), fn(x), x)
+        batch_size = x.size(0)
+        for transform in (lambda img: img.flip(-1), lambda img: img.flip(-2), lambda img: img.transpose(-1, -2)):
+            applies = torch.rand(batch_size, device=device) < 0.5
+            x = torch.where(applies.view(batch_size, 1, 1, 1), transform(x), x)
     if x.shape[-1] != img_size or x.shape[-2] != img_size:
         x = F.interpolate(x, size=img_size, mode="bilinear", align_corners=False)
     x = (x - spec.mean) / spec.std

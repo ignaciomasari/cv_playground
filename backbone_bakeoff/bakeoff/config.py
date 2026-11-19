@@ -67,18 +67,18 @@ FT_KEYS = {"epochs", "epochs_by_frac", "lr", "wd", "warmup_frac", "label_smooth"
 LP_KEYS = {"lp_epochs", "lp_lr", "lp_bs", "lp_wd_grid"}
 MODE_KEYS = {"ft": FT_KEYS, "lp": LP_KEYS}
 _groups = (SHARED_KEYS, SYSTEM_KEYS, FT_KEYS, LP_KEYS)  # each field in exactly one, else hash drifts silently
-assert set().union(*_groups) == {f.name for f in dataclasses.fields(RunConfig)} and \
+assert set().union(*_groups) == {field.name for field in dataclasses.fields(RunConfig)} and \
     sum(map(len, _groups)) == len(dataclasses.fields(RunConfig))
 
 
 def recipe(cfg):
     """Fields defining the run for cfg.mode (shared + mode's own); epochs resolved."""
     keep = SHARED_KEYS | MODE_KEYS[cfg.mode]
-    r = {k: v for k, v in dataclasses.asdict(cfg).items() if k in keep}
+    values = {key: value for key, value in dataclasses.asdict(cfg).items() if key in keep}
     if cfg.mode == "ft":
-        del r["epochs_by_frac"]
-        r["epochs"] = cfg.max_epochs
-    return r
+        del values["epochs_by_frac"]
+        values["epochs"] = cfg.max_epochs
+    return values
 
 
 def config_hash(cfg):
@@ -87,38 +87,38 @@ def config_hash(cfg):
 
 
 def load_config(path=None, overrides=()):
-    """YAML (optional) then overrides ["k=v", ...] (YAML values; text fields fall back to raw string)."""
-    d = {}
+    """YAML (optional) then overrides ["key=value", ...] (YAML values; text fields fall back to raw string)."""
+    values = {}
     if path:
-        with open(path) as f:
-            d.update(yaml.safe_load(f) or {})
+        with open(path) as file:
+            values.update(yaml.safe_load(file) or {})
     fields = dataclasses.fields(RunConfig)
-    str_keys = {f.name for f in fields if f.type in (str, Optional[str])}
-    for o in overrides:
-        k, _, v = o.partition("=")
-        k = k.strip()
+    str_keys = {field.name for field in fields if field.type in (str, Optional[str])}
+    for override in overrides:
+        key, _, raw = override.partition("=")
+        key = key.strip()
         try:
-            val = yaml.safe_load(v)
+            value = yaml.safe_load(raw)
         except yaml.YAMLError:
-            val = v
-        if k in str_keys and not isinstance(val, (str, type(None))):  # "{WORK_DIR}/x" -> dict, "16" -> int
-            val = v.strip()
-        d[k] = val
-    if unknown := set(d) - {f.name for f in fields}:
+            value = raw
+        if key in str_keys and not isinstance(value, (str, type(None))):  # "{WORK_DIR}/x" -> dict, "16" -> int
+            value = raw.strip()
+        values[key] = value
+    if unknown := set(values) - {field.name for field in fields}:
         raise ValueError(f"unknown config keys: {sorted(unknown)}")
-    for f in fields:  # YAML reads "1e-3" as str
-        t = f.type.__args__[0] if getattr(f.type, "__args__", None) else f.type  # Optional[int] -> int
-        if f.name in d and d[f.name] is not None and t in (int, float):
-            d[f.name] = t(d[f.name])
-    cfg = RunConfig(**d)
-    for k, ok in CHOICES.items():
-        if getattr(cfg, k) not in ok:
-            raise ValueError(f"{k}={getattr(cfg, k)!r} not in {ok}")
+    for field in fields:  # YAML reads "1e-3" as str
+        field_type = field.type.__args__[0] if getattr(field.type, "__args__", None) else field.type  # Optional[int] -> int
+        if field.name in values and values[field.name] is not None and field_type in (int, float):
+            values[field.name] = field_type(values[field.name])
+    cfg = RunConfig(**values)
+    for key, allowed in CHOICES.items():
+        if getattr(cfg, key) not in allowed:
+            raise ValueError(f"{key}={getattr(cfg, key)!r} not in {allowed}")
     cfg.out_dir = cfg.out_dir or os.path.join(WORK_DIR, "saved_models", "backbone_bakeoff")
     cfg.data_root = cfg.data_root or os.path.join(WORK_DIR, "data", "eurosat")
     cfg.results_csv = cfg.results_csv or os.path.join(cfg.out_dir, "results.csv")
-    for k in ("out_dir", "data_root", "results_csv"):  # "{WORK_DIR}/..." -> pod/local work dir
-        setattr(cfg, k, getattr(cfg, k).replace("{WORK_DIR}", WORK_DIR))
-    cfg.epochs_by_frac = {float(k): int(v) for k, v in cfg.epochs_by_frac.items()}
-    cfg.lp_wd_grid = [float(w) for w in cfg.lp_wd_grid]
+    for key in ("out_dir", "data_root", "results_csv"):  # "{WORK_DIR}/..." -> pod/local work dir
+        setattr(cfg, key, getattr(cfg, key).replace("{WORK_DIR}", WORK_DIR))
+    cfg.epochs_by_frac = {float(frac): int(epochs) for frac, epochs in cfg.epochs_by_frac.items()}
+    cfg.lp_wd_grid = [float(wd) for wd in cfg.lp_wd_grid]
     return cfg

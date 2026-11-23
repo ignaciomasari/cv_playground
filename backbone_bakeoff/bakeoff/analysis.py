@@ -1,5 +1,7 @@
 """Results analysis: varied hparams (from row config JSON), seed-mean summary, paired deltas, Pareto."""
 import json
+from collections.abc import Iterable, Mapping, Sequence
+from typing import Any
 
 import pandas as pd
 
@@ -10,14 +12,14 @@ GROUP = [k for k in KEY if k != "seed"] + ["in_chans"]  # summary rows
 BENCH_COLS = ["params_M", "infer_ips", "infer_mem_MB", "train_ips", "train_mem_MB"]  # bench.csv
 
 
-def hparams(df):
+def hparams(df: pd.DataFrame) -> pd.DataFrame:
     """Recipe values per row from `config` JSON (no config, e.g. notebook rows -> NaN). Run keys dropped."""
     configs = [json.loads(config) if isinstance(config, str) else {} for config in df.config]
     recipe_values = pd.DataFrame(configs, index=df.index).drop(columns=KEY, errors="ignore")
     return recipe_values.map(lambda value: json.dumps(value) if isinstance(value, (list, dict)) else value)  # hashable
 
 
-def varied(df):
+def varied(df: pd.DataFrame) -> list[str]:
     """Recipe keys with >1 value within some (mode, frac) -> resolved epochs (set by frac) not counted."""
     recipe_values = hparams(df)
     if recipe_values.empty:
@@ -26,7 +28,7 @@ def varied(df):
     return [k for k in recipe_values.columns if n_unique[k] > 1]
 
 
-def with_varied(df, split_by=None):
+def with_varied(df: pd.DataFrame, split_by: Sequence[str] | None = None) -> tuple[pd.DataFrame, list[str]]:
     """-> (df + split_by hparam columns, split_by). split_by: None = varied(df); [] = pool recipes (e.g. tuned)."""
     split_by = varied(df) if split_by is None else list(split_by)
     recipe_values = hparams(df)
@@ -34,7 +36,7 @@ def with_varied(df, split_by=None):
     return df.drop(columns=hparam_cols, errors="ignore").join(recipe_values[hparam_cols]), split_by
 
 
-def tag_by_grid(df, grids):
+def tag_by_grid(df: pd.DataFrame, grids: Mapping[str, str]) -> pd.DataFrame:
     """Rows whose config_hash is in grid {name: grid.yaml} -> recipe=name; in several -> duplicated; none
     (sweep, --set variants, old notebook rows) -> dropped."""
     from .grid import expand  # lazy: grid pulls models/torch
@@ -44,7 +46,8 @@ def tag_by_grid(df, grids):
     return pd.concat(parts, ignore_index=True)
 
 
-def summary(df, bench=None, split_by=None):
+def summary(df: pd.DataFrame, bench: pd.DataFrame | None = None,
+            split_by: Sequence[str] | None = None) -> pd.DataFrame:
     """Mean ± std of top1_test over seeds per run key + split_by keys; + bench throughput if given."""
     df, split_by = with_varied(df, split_by)
     agg = (df.groupby(GROUP + split_by, dropna=False)
@@ -56,7 +59,7 @@ def summary(df, bench=None, split_by=None):
     return agg
 
 
-def _delta(rows_a, rows_b, on, extra=()):
+def _delta(rows_a: pd.DataFrame, rows_b: pd.DataFrame, on: list[str], extra: Iterable[str] = ()) -> pd.DataFrame:
     """Seed-paired 100·(a − b) of top1_test -> mean/std/n per `on` (minus seed) + extra."""
     pairs = rows_a.merge(rows_b, on=on, suffixes=("_a", "_b"))  # NaN keys match NaN (notebook rows)
     pairs["delta"] = 100 * (pairs.top1_test_a - pairs.top1_test_b)
@@ -64,7 +67,8 @@ def _delta(rows_a, rows_b, on, extra=()):
     return pairs.groupby(group, dropna=False).delta.agg(mean="mean", std="std", n="count").reset_index()
 
 
-def paired_delta(df, key, value_a, value_b, split_by=None):
+def paired_delta(df: pd.DataFrame, key: str, value_a: Any, value_b: Any,
+                 split_by: Sequence[str] | None = None) -> pd.DataFrame:
     """pp delta rows[key]==value_a minus rows[key]==value_b, paired on everything else (frac+seed -> same subset)."""
     if split_by is not None and key not in df:  # key is an hparam -> needs its column
         split_by = [*split_by, key]
@@ -74,7 +78,7 @@ def paired_delta(df, key, value_a, value_b, split_by=None):
     return _delta(rows_with(value_a), rows_with(value_b), on)
 
 
-def ft_lp_gap(df, split_by=None):
+def ft_lp_gap(df: pd.DataFrame, split_by: Sequence[str] | None = None) -> pd.DataFrame:
     """pp FT − LP per seed; each FT recipe vs each LP recipe (shared split keys must match)."""
     df, split_by = with_varied(df, split_by)
     mode_only = set().union(*MODE_KEYS.values())
@@ -84,7 +88,7 @@ def ft_lp_gap(df, split_by=None):
     return _delta(rows_of("ft"), rows_of("lp"), on, extra=own_keys["ft"] + own_keys["lp"])
 
 
-def table(agg, split_by=()):
+def table(agg: pd.DataFrame, split_by: Sequence[str] = ()) -> pd.DataFrame:
     """Wide: rows (backbone, init, *split_by), cols "FT 10%" = "mean ± std" (%); + bench cols if merged."""
     agg = agg.assign(**{k: agg[k].astype(object).where(agg[k].notna(), "–") for k in split_by})  # other mode's key
     std = agg["std"].fillna(0)
@@ -99,7 +103,7 @@ def table(agg, split_by=()):
     return wide
 
 
-def pareto(points, x="infer_ips", y="top1"):
+def pareto(points: pd.DataFrame, x: str = "infer_ips", y: str = "top1") -> pd.DataFrame:
     """Points no other point beats on both x and y (higher = better), sorted by x."""
     keep, best = [], float("-inf")
     for i, point in points.dropna(subset=[x, y]).sort_values([x, y], ascending=False).iterrows():
@@ -109,7 +113,7 @@ def pareto(points, x="infer_ips", y="top1"):
     return points.loc[keep].sort_values(x)
 
 
-def variants(agg, split_by):
+def variants(agg: pd.DataFrame, split_by: list[str]) -> list[tuple[str, pd.DataFrame]]:
     """[(title, rows)]: one per FT combo of split_by values; NaN (other mode's key) matches any combo."""
     if not split_by:
         return [("", agg)]
@@ -125,7 +129,8 @@ def variants(agg, split_by):
     return out
 
 
-def plot_pareto(agg, split_by=(), x="infer_ips", xlabel="inference img/s"):
+def plot_pareto(agg: pd.DataFrame, split_by: Sequence[str] = (), x: str = "infer_ips",
+                xlabel: str = "inference img/s"):
     """Rows = split_by combos, cols = label fraction; legend/encoding in notebook md."""
     import matplotlib.pyplot as plt
     from matplotlib.lines import Line2D

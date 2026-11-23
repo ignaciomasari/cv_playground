@@ -2,6 +2,7 @@
 import argparse
 import gc
 import time
+from collections.abc import Sequence
 
 import pandas as pd
 import timm
@@ -11,13 +12,14 @@ import torch.nn.functional as F
 from .models import BACKBONES
 
 
-def _sync(device):
+def _sync(device: torch.device) -> None:
     if device.type == "cuda":
         torch.cuda.synchronize(device)
 
 
-def imgs_per_s(model, in_chans=3, bs=64, img=224, train=False, warmup=10, iters=50,
-               dtype=torch.bfloat16, device="cuda", num_classes=10):
+def imgs_per_s(model: torch.nn.Module, in_chans: int = 3, bs: int = 64, img: int = 224, train: bool = False,
+               warmup: int = 10, iters: int = 50, dtype: torch.dtype = torch.bfloat16,
+               device: torch.device | str = "cuda", num_classes: int = 10) -> tuple[float, float]:
     """img/s + peak MB (NaN off-GPU). Synthetic batch, autocast, channels_last.
     train=False: inference_mode fwd; train=True: fwd+bwd+AdamW step."""
     device = torch.device(device)
@@ -57,12 +59,13 @@ def imgs_per_s(model, in_chans=3, bs=64, img=224, train=False, warmup=10, iters=
     return throughput, peak_mem_mb
 
 
-def bench_backbones(backbones=None, in_chans=(3, 13), num_classes=10, **bench_kwargs):
+def bench_backbones(backbones: Sequence[str] | None = None, in_chans: Sequence[int] = (3, 13), num_classes: int = 10,
+                    **bench_kwargs) -> pd.DataFrame:
     """One row per (backbone, in_chans). Random init: weights don't affect speed."""
     rows = []
     for backbone in backbones or BACKBONES:
         for chans in in_chans:
-            model = timm.create_model(BACKBONES[backbone]["arch"], pretrained=False, in_chans=chans,
+            model = timm.create_model(BACKBONES[backbone].arch, pretrained=False, in_chans=chans,
                                       num_classes=num_classes)
             infer_ips, infer_mem = imgs_per_s(model, chans, train=False, num_classes=num_classes, **bench_kwargs)
             train_ips, train_mem = imgs_per_s(model, chans, train=True, num_classes=num_classes, **bench_kwargs)
@@ -76,7 +79,7 @@ def bench_backbones(backbones=None, in_chans=(3, 13), num_classes=10, **bench_kw
     return pd.DataFrame(rows)
 
 
-def main(argv=None):
+def main(argv: Sequence[str] | None = None) -> pd.DataFrame:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", required=True)
     parser.add_argument("--backbones", nargs="+", choices=list(BACKBONES), default=list(BACKBONES))

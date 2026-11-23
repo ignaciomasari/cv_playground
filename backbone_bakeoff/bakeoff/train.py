@@ -1,10 +1,12 @@
 """One run (FT via Lightning | LP) -> results row: `python -m bakeoff.train --set mode=lp backbone=vit_s16 seed=1`."""
 import argparse
-import json
+import dataclasses
 import math
 import time
 import warnings
+from collections.abc import Callable, Sequence
 from functools import partial, partialmethod
+from typing import Any
 
 import lightning as L
 import torch
@@ -13,22 +15,23 @@ from torch.utils.data import DataLoader, TensorDataset
 
 from . import data as bd
 from . import models as bm
-from .config import config_hash, load_config, recipe
+from .config import Aug, Mode, RunConfig, config_hash, load_config
+from .data import Data
 from .lp import run_lp
-from .results import log_row
+from .results import FTMetrics, Metrics, ResultRow, log_row
 
 # data = in-RAM int16 tensors, prep on GPU -> workers not needed
 warnings.filterwarnings("ignore", ".*does not have many workers.*")
 
 
-def lr_lambda(step, warm, total):
+def lr_lambda(step: int, warm: int, total: int) -> float:
     """LR multiplier: linear warmup (warm steps) -> cosine to 0 at total."""
     if step < warm:
         return (step + 1) / warm
     return 0.5 * (1 + math.cos(math.pi * (step - warm) / max(1, total - warm)))
 
 
-def param_groups(model, wd):
+def param_groups(model: nn.Module, wd: float) -> list[dict[str, Any]]:
     """AdamW groups: no wd on norm/bias/1-d params, pos_embed, cls_token."""
     decay, no_decay = [], []
     for name, param in model.named_parameters():
@@ -40,7 +43,7 @@ def param_groups(model, wd):
 class FTModule(L.LightningModule):
     """Full FT; prep + D4 aug on GPU after batch transfer."""
 
-    def __init__(self, model, spec, cfg, total_steps):
+    def __init__(self, model: nn.Module, spec: bm.InputSpec, cfg: RunConfig, total_steps: int):
         super().__init__()
         self.model, self.spec, self.cfg, self.total_steps = model, spec, cfg, total_steps
         self.criterion = nn.CrossEntropyLoss(label_smoothing=cfg.label_smooth)
@@ -64,7 +67,7 @@ class FTModule(L.LightningModule):
     def on_after_batch_transfer(self, batch, dataloader_idx):
         x, y = batch
         self.spec.to(self.device)
-        aug = self.trainer.training and self.cfg.aug == "d4"
+        aug = self.trainer.training and self.cfg.aug is Aug.D4
         return bm.prep(x, self.spec, aug, self.cfg.img_size), y
 
     def training_step(self, batch, _):
@@ -104,14 +107,14 @@ class FTModule(L.LightningModule):
         return {"optimizer": optimizer, "lr_scheduler": {"scheduler": scheduler, "interval": "step"}}
 
 
-def _loader(x, y, batch_size, train, num_workers=0):
+def _loader(x: torch.Tensor, y: torch.Tensor, batch_size: int, train: bool, num_workers: int = 0) -> DataLoader:
     return DataLoader(TensorDataset(x, y), batch_size=batch_size, shuffle=train,
                       drop_last=train and len(y) >= batch_size,
                       num_workers=num_workers, persistent_workers=num_workers > 0,
                       pin_memory=torch.cuda.is_available())
 
 
-def _loggers(cfg):
+def _loggers(cfg: RunConfig) -> list | bool:
     """FT curves (train_loss, lr per step; val acc if val_every) under out_dir/{runs,tb}/<hash>."""
     if not cfg.curves:
         return False
@@ -123,8 +126,7 @@ def _loggers(cfg):
     return loggers
 
 
-def run_ft(cfg, data):
-    """-> FT row fields (no config cols)."""
+def run_ft(cfg: RunConfig, data: Data) -> FTMetrics:
     torch.backends.cudnn.benchmark = True  # as notebook
     torch.backends.cuda.matmul.allow_tf32 = torch.backends.cudnn.allow_tf32 = True
     model, spec = bm.build_from(cfg, data["train"][0])
@@ -144,35 +146,32 @@ def run_ft(cfg, data):
     trainer.fit(module, _loader(x, y, cfg.bs, True, cfg.num_workers), val_loader)
     peak_mem_mb = torch.cuda.max_memory_allocated() / 2**20 if on_cuda else float("nan")
 
-    def top1(split, evaluate):  # evaluate: trainer.validate | trainer.test
+    def top1(split: str, evaluate: Callable) -> float:  # evaluate: trainer.validate | trainer.test
         loader = _loader(*data[split], bd.EVAL_BS, False, cfg.num_workers)
         return evaluate(module, loader, verbose=False)[0][f"{split}_acc"]
-    return dict(n_train=len(y), top1_val=top1("val", trainer.validate), top1_test=top1("test", trainer.test),
-                steps=trainer.global_step, final_loss=float(module.last_loss),
-                train_time_s=module.train_time_s, train_peak_mem_MB=peak_mem_mb)
+    return FTMetrics(n_train=len(y), top1_val=top1("val", trainer.validate), top1_test=top1("test", trainer.test),
+                     steps=trainer.global_step, final_loss=float(module.last_loss),
+                     train_time_s=module.train_time_s, train_peak_mem_MB=peak_mem_mb)
 
 
-RUNNERS = {"ft": run_ft, "lp": run_lp}
+RUNNERS: dict[Mode, Callable[[RunConfig, Data], Metrics]] = {Mode.FT: run_ft, Mode.LP: run_lp}
 
 
-def run(cfg, data=None):
+def run(cfg: RunConfig, data: Data | None = None) -> ResultRow:
     """One run -> results row, appended to cfg.results_csv. data: {split: (x int16, y)} or load cache."""
     L.seed_everything(cfg.seed, workers=True, verbose=False)
     data = data or bd.load_eurosat(cfg.data_root)
-    metrics = RUNNERS[cfg.mode](cfg, data)
-    row = dict(backbone=cfg.backbone, init=cfg.init, mode=cfg.mode, frac=cfg.frac, seed=cfg.seed,
-               in_chans=bm.in_chans_of(cfg.init), **metrics,
-               config_hash=config_hash(cfg), config=json.dumps(recipe(cfg), sort_keys=True))
+    row = ResultRow.from_run(cfg, RUNNERS[cfg.mode](cfg, data))
     log_row(cfg.results_csv, row)
     return row
 
 
-def main(argv=None, data=None):
+def main(argv: Sequence[str] | None = None, data: Data | None = None) -> dict[str, Any]:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", help="YAML (default: built-in = configs/default.yaml)")
     parser.add_argument("--set", nargs="*", default=[], metavar="KEY=VAL", help="config overrides")
     args = parser.parse_args(argv)
-    row = run(load_config(args.config, args.set), data)
+    row = dataclasses.asdict(run(load_config(args.config, args.set), data))
     print({key: (round(value, 4) if isinstance(value, float) else value) for key, value in row.items()
            if key != "config"})
     return row

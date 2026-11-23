@@ -1,4 +1,3 @@
-import pytest
 import yaml
 
 from bakeoff.grid import expand
@@ -43,3 +42,18 @@ def test_pick_skips_pairs_without_results(tmp_path):
     run = next(run for run in expand(sweep) if run.cfg.backbone == "vit_s16")
     log(run, 0.9, 0.9)
     assert pick(sweep) == {("vit_s16", "imagenet_rgb"): dict(lr=run.cfg.lr, drop_path_rate=run.cfg.drop_path_rate)}
+
+
+def test_write_tuned_handles_enum_hparams(tmp_path):
+    from bakeoff.tune import write_tuned
+    sweep_path = tmp_path / "sweep.yaml"
+    sweep_path.write_text(yaml.safe_dump({"base": DEFAULT, "set": {"out_dir": str(tmp_path), "frac": 0.1},
+                                          "grid": {"aug": ["d4", "none"]}}))
+    grid_path = tmp_path / "grid.yaml"
+    grid_path.write_text(yaml.safe_dump({"base": DEFAULT, "set": {"out_dir": str(tmp_path)}, "grid": {"seed": [0]}}))
+    runs = expand(str(sweep_path))
+    log(runs[0], 0.8, 0.8)
+    log(runs[1], 0.9, 0.9)
+    out, picks = write_tuned(str(sweep_path), str(grid_path))
+    assert picks == {("resnet50", "imagenet_rgb"): {"aug": "none"}} and type(picks[("resnet50", "imagenet_rgb")]["aug"]) is str
+    assert [run.cfg.aug for run in expand(out)] == ["none"]

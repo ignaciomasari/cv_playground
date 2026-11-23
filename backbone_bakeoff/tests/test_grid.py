@@ -96,3 +96,27 @@ def test_rules_override_only_matching_runs_and_cli_wins(tmp_path):
     assert settings == {("resnet50", "imagenet_rgb"): (2e-4, 0.1), ("resnet50", "s2_ssl"): (2e-4, 0.1),
                   ("vit_s16", "imagenet_rgb"): (2e-4, 0.05), ("vit_s16", "s2_ssl"): (1e-3, 0.05)}
     assert {run.cfg.lr for run in expand(str(grid_path), ["lr=5e-4"])} == {5e-4}
+
+
+# --- GridSpec
+def test_unknown_backbone_raises_not_dropped(tmp_path):
+    with pytest.raises(ValueError, match="resnet5"):
+        expand(grid_file(tmp_path, {"backbone": ["resnet5"]}))
+
+
+def test_unknown_grid_file_key_raises(tmp_path):
+    path = tmp_path / "g.yaml"
+    path.write_text(yaml.safe_dump({"base": DEFAULT, "rule": []}))
+    with pytest.raises(ValueError, match="rule"):
+        expand(str(path))
+
+
+def test_spec_dump_load_round_trip(tmp_path):
+    from bakeoff.config import Init
+    from bakeoff.grid import GridSpec, Rule
+    spec = GridSpec.load(grid_file(tmp_path, {"seed": [0, 1]})).with_rules(
+        [Rule({"backbone": "resnet50", "init": Init.S2_SSL}, {"lr": 1e-3})])  # enum -> plain str in YAML
+    spec.dump(str(tmp_path / "out.yaml"))
+    again = GridSpec.load(str(tmp_path / "out.yaml"))
+    assert [run.run_id for run in again.expand()] == [run.run_id for run in spec.expand()]
+    assert again.rules[0].when == {"backbone": "resnet50", "init": "s2_ssl"}

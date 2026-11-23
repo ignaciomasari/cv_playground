@@ -8,14 +8,17 @@ import torch.nn.functional as F
 
 from . import data as bd
 from . import models as bm
+from .config import RunConfig
+from .data import Data
+from .results import LPMetrics
 
 
-def device_of(cfg):
+def device_of(cfg: RunConfig) -> torch.device:
     want_gpu = cfg.accelerator in ("auto", "gpu", "cuda")
     return torch.device("cuda" if want_gpu and torch.cuda.is_available() else "cpu")
 
 
-def feats_path(cfg):
+def feats_path(cfg: RunConfig) -> str:
     """Notebook name for default (224px, pretrained, bf16); suffix otherwise."""
     tag = "" if cfg.img_size == 224 else f"_{cfg.img_size}px"
     tag += "" if cfg.pretrained else "_rand"
@@ -24,7 +27,7 @@ def feats_path(cfg):
 
 
 @torch.inference_mode()
-def extract(cfg, data, device):
+def extract(cfg: RunConfig, data: Data, device: torch.device) -> dict[str, torch.Tensor]:
     """{split: float feats [N, D]} from frozen eval backbone, no aug; cached in out_dir."""
     path = feats_path(cfg)
     if os.path.isfile(path):
@@ -44,7 +47,7 @@ def extract(cfg, data, device):
     return feats
 
 
-def train_linear(feats, y, wd, cfg):
+def train_linear(feats: torch.Tensor, y: torch.Tensor, wd: float, cfg: RunConfig) -> nn.Linear:
     torch.manual_seed(cfg.seed)
     head = nn.Linear(feats.size(1), cfg.num_classes).to(feats.device)
     optimizer = torch.optim.AdamW(head.parameters(), lr=cfg.lp_lr, weight_decay=wd)
@@ -62,12 +65,12 @@ def train_linear(feats, y, wd, cfg):
 
 
 @torch.no_grad()
-def _acc(head, feats, y):
+def _acc(head: nn.Module, feats: torch.Tensor, y: torch.Tensor) -> float:
     return (head(feats).argmax(1) == y).float().mean().item()
 
 
-def run_lp(cfg, data):
-    """-> LP row fields (no config cols). Standardise w/ subset stats; best wd on val -> test."""
+def run_lp(cfg: RunConfig, data: Data) -> LPMetrics:
+    """Standardise w/ subset stats; best wd on val -> test."""
     device = device_of(cfg)
     feats = extract(cfg, data, device)
     idx, _, y_train = bd.train_subset(data, cfg)
@@ -79,4 +82,4 @@ def run_lp(cfg, data):
     heads = [(wd, train_linear(train_feats, y_train, wd, cfg)) for wd in cfg.lp_wd_grid]
     val_acc, wd, head = max(((_acc(head, val_feats, y_val), wd, head) for wd, head in heads),
                             key=lambda candidate: candidate[0])
-    return dict(n_train=len(idx), top1_val=val_acc, top1_test=_acc(head, test_feats, y_test), lp_wd=wd)
+    return LPMetrics(n_train=len(idx), top1_val=val_acc, top1_test=_acc(head, test_feats, y_test), lp_wd=wd)

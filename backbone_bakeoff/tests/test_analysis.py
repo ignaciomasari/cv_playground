@@ -5,7 +5,6 @@ import yaml
 
 from bakeoff.analysis import ft_lp_gap, paired_delta, summary, tag_by_grid
 from bakeoff.config import config_hash, load_config, recipe
-from bakeoff.models import in_chans_of
 from bakeoff.results import log_row, read_results
 
 
@@ -13,7 +12,7 @@ def row(top1, **overrides):
     """Results row as train.run writes it (config JSON + hash)."""
     cfg = load_config(None, [f"{key}={value}" for key, value in overrides.items()])
     return dict(backbone=cfg.backbone, init=cfg.init, mode=cfg.mode, frac=cfg.frac, seed=cfg.seed,
-                in_chans=in_chans_of(cfg.init), top1_test=top1,
+                in_chans=cfg.init.in_chans, top1_test=top1,
                 config_hash=config_hash(cfg), config=json.dumps(recipe(cfg), sort_keys=True))
 
 

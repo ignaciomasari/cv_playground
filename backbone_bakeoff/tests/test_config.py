@@ -93,3 +93,25 @@ def test_work_dir_placeholder_in_paths():
 def test_text_overrides_tolerate_quotes_and_spaces():
     cfg = load_config(None, ["mode= lp", "init='s2_ssl'", "precision=16", "data_root=null"])
     assert (cfg.mode, cfg.init, cfg.precision) == ("lp", "s2_ssl", "16") and cfg.data_root.endswith("eurosat")
+
+
+# --- refactor guards: finished runs keep their ids
+def test_hash_pinned_to_existing_results():
+    # aeaffa0489 = run 84/108 of the real bake-off log
+    assert config_hash(load_config()) == "c244a4f977"
+    assert config_hash(load_config(None, ["mode=lp"])) == "6bb3c95df5"
+    assert config_hash(load_config(None, ["backbone=vit_s16", "init=s2_ssl", "frac=0.01", "seed=2"])) == "aeaffa0489"
+
+
+def test_invalid_init_raises():
+    with pytest.raises(ValueError, match="s2_sl"):
+        load_config(None, ["init=s2_sl"])
+
+
+def test_direct_construction_validated_and_coerced():
+    from bakeoff.config import Init, Mode, RunConfig
+    cfg = RunConfig(mode="lp", init="s2_ssl", lr="1e-3", out_dir="{WORK_DIR}/x")
+    assert cfg.mode is Mode.LP and cfg.init is Init.S2_SSL and cfg.lr == 1e-3 and "{" not in cfg.results_csv
+    assert cfg.init.in_chans == 13 and Init.IMAGENET_RGB.in_chans == 3
+    with pytest.raises(ValueError, match="kd"):
+        RunConfig(mode="kd")

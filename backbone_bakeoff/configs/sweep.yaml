@@ -1,4 +1,5 @@
-# Tuning sweep, val only (ticket 8): FT, 10% labels -> 6 pairs x 16 = 96 runs
+# Tuning sweep, val only (ticket 8): FT, 10% labels -> 6 pairs x 28 = 168 runs
+# lr widened both ends: first sweep picked grid edges (1e-4 x4, 1e-3 x1); old 96 runs keep hashes -> skipped
 # seed 100 = subset not in bake-off seeds {0,1,2} -> winning sweep run never reused as a tuned result
 #   python -m bakeoff.grid configs/sweep.yaml
 #   python -m bakeoff.tune configs/sweep.yaml configs/grid.yaml   # best top1_val per pair -> <out_dir>/tuned.yaml
@@ -8,6 +9,6 @@ set: {mode: ft, frac: 0.1, seed: 100}
 grid:
   backbone: [resnet50, vit_s16, convnext_t]
   init: [imagenet_rgb, s2_ssl, imagenet_13ch]
-  lr: [1.0e-4, 2.0e-4, 5.0e-4, 1.0e-3]
+  lr: [2.0e-5, 5.0e-5, 1.0e-4, 2.0e-4, 5.0e-4, 1.0e-3, 2.0e-3]
   drop_path_rate: [0.0, 0.1]
   wd: [0.05, 0.1]

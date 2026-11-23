@@ -120,3 +120,21 @@ def test_spec_dump_load_round_trip(tmp_path):
     again = GridSpec.load(str(tmp_path / "out.yaml"))
     assert [run.run_id for run in again.expand()] == [run.run_id for run in spec.expand()]
     assert again.rules[0].when == {"backbone": "resnet50", "init": "s2_ssl"}
+
+
+# --- logging
+def test_launch_progress_reaches_stdout_once(tmp_path, capsys):
+    from bakeoff import setup_logging
+    setup_logging()
+    setup_logging()  # idempotent: no duplicate handler
+    launch(grid_file(tmp_path, {"seed": [0, 1]}), dry_run=True)
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0] == "2 runs, 2 to do" and len(lines) == 3 and "seed=1" in lines[2]
+
+
+def test_cli_dry_run_prints_progress(tmp_path):
+    import subprocess
+    from bakeoff.grid import child_env
+    result = subprocess.run([sys.executable, "-m", "bakeoff.grid", grid_file(tmp_path, {"seed": [0, 1]}), "--dry-run"],
+                            env=child_env(), capture_output=True, text=True, check=True)
+    assert "2 runs, 2 to do" in result.stdout and "seed=1" in result.stdout

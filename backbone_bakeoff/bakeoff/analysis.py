@@ -1,5 +1,6 @@
 """Results analysis: varied hparams (from row config JSON), seed-mean summary, paired deltas, Pareto."""
 import json
+import logging
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
@@ -9,6 +10,7 @@ from .config import MODE_KEYS
 from .results import KEY
 
 GROUP = [k for k in KEY if k != "seed"] + ["in_chans"]  # summary rows
+log = logging.getLogger(__name__)
 BENCH_COLS = ["params_M", "infer_ips", "infer_mem_MB", "train_ips", "train_mem_MB"]  # bench.csv
 
 
@@ -141,7 +143,8 @@ def plot_pareto(agg: pd.DataFrame, split_by: Sequence[str] = (), x: str = "infer
     fig, axs = plt.subplots(len(groups), len(fracs), figsize=(5.5 * len(fracs), 4.5 * len(groups)),
                             sharex=True, squeeze=False)
     if agg[x].isna().any():
-        print("no bench row (skipped):", agg.loc[agg[x].isna(), ["backbone", "in_chans"]].drop_duplicates().values.tolist())
+        log.warning("no bench row (skipped): %s",
+                    agg.loc[agg[x].isna(), ["backbone", "in_chans"]].drop_duplicates().values.tolist())
     for ax_row, (title, rows) in zip(axs, groups):
         for ax, frac in zip(ax_row, fracs):
             points = rows[(rows.frac == frac) & rows[x].notna()]

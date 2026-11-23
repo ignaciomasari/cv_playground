@@ -9,6 +9,7 @@ import timm
 import torch
 import torch.nn.functional as F
 
+from . import setup_logging
 from .models import BACKBONES
 
 
@@ -89,6 +90,7 @@ def main(argv: Sequence[str] | None = None) -> pd.DataFrame:
     parser.add_argument("--iters", type=int, default=50)
     parser.add_argument("--device", default="cuda")
     args = parser.parse_args(argv)
+    setup_logging()
     bench = bench_backbones(args.backbones, bs=args.bs, img=args.img, warmup=args.warmup, iters=args.iters,
                             device=args.device)
     bench.to_csv(args.out, index=False)

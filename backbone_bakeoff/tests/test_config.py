@@ -85,9 +85,15 @@ def test_hash_uses_resolved_epochs():
 
 
 def test_work_dir_placeholder_in_paths():
-    from bakeoff.config import WORK_DIR
+    from bakeoff.config import work_dir
     cfg = load_config(None, ["out_dir={WORK_DIR}/x"])
-    assert cfg.out_dir == f"{WORK_DIR}/x" and cfg.results_csv == f"{WORK_DIR}/x/results.csv"
+    assert cfg.out_dir == f"{work_dir()}/x" and cfg.results_csv == f"{work_dir()}/x/results.csv"
+
+
+def test_work_dir_env_overrides_default(monkeypatch, tmp_path):
+    monkeypatch.setenv("BAKEOFF_WORK_DIR", str(tmp_path))
+    cfg = load_config(None, ["data_root={WORK_DIR}/d"])
+    assert cfg.data_root == f"{tmp_path}/d" and cfg.out_dir == f"{tmp_path}/saved_models/backbone_bakeoff"
 
 
 def test_text_overrides_tolerate_quotes_and_spaces():

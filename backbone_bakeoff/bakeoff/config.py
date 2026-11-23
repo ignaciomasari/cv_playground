@@ -11,8 +11,14 @@ from typing import Any, Sequence
 
 import yaml
 
-# pod PVC if present, else parent dir (same rule as notebook)
-WORK_DIR = "/home/jovyan/work" if os.path.isdir("/home/jovyan/work") else ".."
+POD_WORK_DIR = "/home/jovyan/work"
+
+
+def work_dir() -> str:
+    """$BAKEOFF_WORK_DIR, else pod PVC if present, else parent dir (same rule as notebook). Read per call."""
+    return os.environ.get("BAKEOFF_WORK_DIR") or (POD_WORK_DIR if os.path.isdir(POD_WORK_DIR) else "..")
+
+
 EPOCHS_BY_FRAC = {0.01: 200, 0.1: 50, 1.0: 15}  # same per fraction for every backbone
 
 
@@ -94,11 +100,12 @@ class RunConfig:
             setattr(self, config_field.name, value)
         self.epochs_by_frac = {float(frac): int(epochs) for frac, epochs in self.epochs_by_frac.items()}
         self.lp_wd_grid = [float(wd) for wd in self.lp_wd_grid]
-        self.out_dir = self.out_dir or os.path.join(WORK_DIR, "saved_models", "backbone_bakeoff")
-        self.data_root = self.data_root or os.path.join(WORK_DIR, "data", "eurosat")
+        root = work_dir()
+        self.out_dir = self.out_dir or os.path.join(root, "saved_models", "backbone_bakeoff")
+        self.data_root = self.data_root or os.path.join(root, "data", "eurosat")
         self.results_csv = self.results_csv or os.path.join(self.out_dir, "results.csv")
         for key in ("out_dir", "data_root", "results_csv"):  # "{WORK_DIR}/..." -> pod/local work dir
-            setattr(self, key, getattr(self, key).replace("{WORK_DIR}", WORK_DIR))
+            setattr(self, key, getattr(self, key).replace("{WORK_DIR}", root))
 
     @property
     def max_epochs(self) -> int:

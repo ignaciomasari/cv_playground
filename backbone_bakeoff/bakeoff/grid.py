@@ -7,6 +7,7 @@ rules (optional [{when: {backbone: .., init: ..}, set: {..}}] -> overrides for m
 import argparse
 import itertools
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -19,12 +20,14 @@ from typing import Any
 import pandas as pd
 import yaml
 
+from . import setup_logging
 from .config import RunConfig, config_hash, load_config
 from .models import available
 from .results import KEY, append_csv, done_hashes
 
 PKG_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # for PYTHONPATH of children
 TRAIN_CMD = [sys.executable, "-m", "bakeoff.train"]
+log = logging.getLogger("bakeoff.grid")  # not __name__: "__main__" under `python -m`
 
 
 @dataclass
@@ -146,14 +149,14 @@ def launch(grid_path: str, overrides: Sequence[str] = (), cmd: Sequence[str] | N
     runs = expand(grid_path, overrides)
     todo = pending(runs)
     counts = dict(ok=0, failed=0, skipped=len(runs) - len(todo))
-    print(f"{len(runs)} runs, {len(todo)} to do")
+    log.info("%d runs, %d to do", len(runs), len(todo))
     env = child_env()
     for number, run in enumerate(todo, 1):
         cfg = run.cfg
         label = (f"[{number}/{len(todo)}] {cfg.mode} {cfg.backbone} {cfg.init} "
                  f"frac={cfg.frac} seed={cfg.seed} ({run.run_id})")
         if dry_run:
-            print(label)
+            log.info(label)
             continue
         log_path = os.path.join(cfg.out_dir, "logs", f"{run.run_id}.log")
         os.makedirs(os.path.dirname(log_path), exist_ok=True)
@@ -168,7 +171,10 @@ def launch(grid_path: str, overrides: Sequence[str] = (), cmd: Sequence[str] | N
         counts["ok" if returncode == 0 else "failed"] += 1
         if returncode:
             _log_failure(run, returncode, log_path, error)
-        print(label, "ok" if returncode == 0 else f"FAILED rc={returncode} {error} -> {log_path}", flush=True)
+        if returncode == 0:
+            log.info("%s ok", label)
+        else:
+            log.warning("%s FAILED rc=%s %s -> %s", label, returncode, error, log_path)
     return counts
 
 
@@ -179,6 +185,7 @@ def main(argv: Sequence[str] | None = None) -> dict[str, int]:
     parser.add_argument("--dry-run", action="store_true", help="list pending runs only")
     parser.add_argument("--timeout-h", type=float, help="kill a run after this many hours (-> failures.csv)")
     args = parser.parse_args(argv)
+    setup_logging()
     counts = launch(args.grid, args.set, dry_run=args.dry_run,
                     timeout_s=args.timeout_h and args.timeout_h * 3600)
     print(counts)

@@ -1,6 +1,7 @@
 """Append-only results CSV with fixed schema (LP + FT rows share header; n/a cols = NaN)."""
 import dataclasses
 import json
+import logging
 import math
 import os
 from collections.abc import Mapping
@@ -12,6 +13,7 @@ import pandas as pd
 from .config import RunConfig, config_hash, recipe
 
 NAN = math.nan
+log = logging.getLogger(__name__)
 
 
 @dataclass(kw_only=True)
@@ -74,7 +76,7 @@ def _ensure_schema(path: str) -> bool:
         header = file.readline().strip().split(",")
     if header != RESULT_COLS:
         os.replace(path, path + ".bak")
-        print("schema mismatch -> moved to", path + ".bak")
+        log.warning("schema mismatch -> moved to %s.bak", path)
         return False
     return True
 

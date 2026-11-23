@@ -4,14 +4,17 @@
 then `python -m bakeoff.grid <that tuned.yaml>` (same runs as grid.yaml, + per-pair rules).
 """
 import argparse
+import logging
 import os
 from collections.abc import Sequence
 from typing import Any
 
+from . import setup_logging
 from .grid import GridSpec, Rule, Run, plain
 from .results import read_results
 
 Pair = tuple[str, str]  # (backbone, init)
+log = logging.getLogger("bakeoff.tune")  # not __name__: "__main__" under `python -m`
 
 
 def pick(sweep_path: str, overrides: Sequence[str] = ()) -> dict[Pair, dict[str, Any]]:
@@ -41,7 +44,7 @@ def write_tuned(sweep_path: str, grid_path: str, out: str | None = None,
     runs = sweep.expand(overrides)
     picks = _pick(runs, sweep.swept_keys)
     if missing := sorted({(run.cfg.backbone, str(run.cfg.init)) for run in runs} - set(picks)):
-        print("no sweep results (fixed recipe kept):", missing)
+        log.warning("no sweep results (fixed recipe kept): %s", missing)
     tuned = GridSpec.load(grid_path).with_rules(  # appended -> tuned wins over grid's own rules
         [Rule(dict(backbone=backbone, init=init), hparams) for (backbone, init), hparams in sorted(picks.items())])
     out = out or os.path.join(runs[0].cfg.out_dir, "tuned.yaml")
@@ -57,6 +60,7 @@ def main(argv: Sequence[str] | None = None) -> str:
     parser.add_argument("--set", nargs="*", default=[], metavar="KEY=VAL",
                         help="same overrides as the sweep launch")
     args = parser.parse_args(argv)
+    setup_logging()
     out, picks = write_tuned(args.sweep, args.grid, args.out, args.set)
     for pair, hparams in sorted(picks.items()):
         print(*pair, hparams)

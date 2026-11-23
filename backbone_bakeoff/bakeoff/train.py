@@ -14,6 +14,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 
 from . import data as bd
+from . import setup_logging
 from . import models as bm
 from .config import Aug, Mode, RunConfig, config_hash, load_config
 from .data import Data
@@ -171,6 +172,7 @@ def main(argv: Sequence[str] | None = None, data: Data | None = None) -> dict[st
     parser.add_argument("--config", help="YAML (default: built-in = configs/default.yaml)")
     parser.add_argument("--set", nargs="*", default=[], metavar="KEY=VAL", help="config overrides")
     args = parser.parse_args(argv)
+    setup_logging()
     row = dataclasses.asdict(run(load_config(args.config, args.set), data))
     print({key: (round(value, 4) if isinstance(value, float) else value) for key, value in row.items()
            if key != "config"})
